@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -36,7 +37,13 @@ func main() {
 			ipPacket, _ := ipLayer.(*layers.IPv4)
 			tcpPacket, _ := tcpLayer.(*layers.TCP)
 
-			fmt.Printf("%s:%s -> %s:%s\n", ipPacket.SrcIP, tcpPacket.SrcPort, ipPacket.DstIP, tcpPacket.DstPort)
+			timestamp := packet.Metadata().Timestamp
+			location, err := time.LoadLocation("Asia/Shanghai")
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Printf("[%s] %s:%d -> %s:%d\n", timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), ipPacket.SrcIP, tcpPacket.SrcPort, ipPacket.DstIP, tcpPacket.DstPort)
 
 			if tcpPacket.DstPort == layers.TCPPort(serverPort) && tcpPacket.Payload != nil {
 				payload := string(tcpPacket.Payload)
