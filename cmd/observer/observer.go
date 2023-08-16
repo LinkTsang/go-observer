@@ -3,13 +3,22 @@ package main
 import (
 	"fmt"
 	"log"
-	"strings"
+	"net"
 	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 )
+
+type Record struct {
+	Timestamp time.Time
+	SrcIP     net.IP
+	SrcPort   layers.TCPPort
+	DstIP     net.IP
+	DstPort   layers.TCPPort
+	Payload   []byte
+}
 
 func main() {
 	handle, err := pcap.OpenLive("lo", 65536, true, pcap.BlockForever)
@@ -28,6 +37,17 @@ func main() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
+	ch := make(chan Record, 1024)
+	go func() {
+		location, err := time.LoadLocation("Asia/Shanghai")
+		if err != nil {
+			log.Fatal(err)
+		}
+		for r := range ch {
+			fmt.Printf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
+		}
+	}()
+
 	for packet := range packetSource.Packets() {
 		ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
 		ipLayer := packet.Layer(layers.LayerTypeIPv4)
@@ -38,36 +58,28 @@ func main() {
 			tcpPacket, _ := tcpLayer.(*layers.TCP)
 
 			timestamp := packet.Metadata().Timestamp
-			location, err := time.LoadLocation("Asia/Shanghai")
-			if err != nil {
-				log.Fatal(err)
+			srcIP := ipPacket.SrcIP
+			srcPort := tcpPacket.SrcPort
+			dstIP := ipPacket.DstIP
+			dstPort := tcpPacket.DstPort
+
+			r := Record{
+				Timestamp: timestamp,
+				SrcIP:     srcIP,
+				SrcPort:   srcPort,
+				DstIP:     dstIP,
+				DstPort:   dstPort,
 			}
 
-			fmt.Printf("[%s] %s:%d -> %s:%d\n", timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), ipPacket.SrcIP, tcpPacket.SrcPort, ipPacket.DstIP, tcpPacket.DstPort)
-
 			if tcpPacket.DstPort == layers.TCPPort(serverPort) && tcpPacket.Payload != nil {
-				payload := string(tcpPacket.Payload)
-
-				reqHeaders := strings.Split(payload, "\r\n")
-				for _, header := range reqHeaders {
-					if strings.HasPrefix(header, "Host:") {
-						host := strings.TrimSpace(strings.TrimPrefix(header, "Host:"))
-						fmt.Printf("Request to: %s\n", host)
-					}
-				}
+				r.Payload = tcpPacket.Payload
 			}
 
 			if tcpPacket.SrcPort == layers.TCPPort(serverPort) && tcpPacket.Payload != nil {
-				payload := string(tcpPacket.Payload)
-
-				bodyStart := strings.Index(payload, "\r\n\r\n") + 4
-				if bodyStart > 0 && len(payload) >= bodyStart {
-					body := payload[bodyStart:]
-					fmt.Printf("Response body:\n%s\n", body)
-				}
+				r.Payload = tcpPacket.Payload
 			}
 
-			fmt.Printf("====\n\n")
+			ch <- r
 		}
 	}
 }
