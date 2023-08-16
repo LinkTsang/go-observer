@@ -20,6 +20,25 @@ type Record struct {
 	Payload   []byte
 }
 
+type RecordConsumer interface {
+	consumer(*Record)
+}
+
+type StdoutRecordConsumer struct {
+}
+
+func (c *StdoutRecordConsumer) consumer(r *Record) {
+	if r == nil {
+		log.Fatal("emptry record!")
+		return
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
+}
+
 func main() {
 	handle, err := pcap.OpenLive("lo", 65536, true, pcap.BlockForever)
 	if err != nil {
@@ -37,14 +56,11 @@ func main() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
+	recordConsumerStdout := &StdoutRecordConsumer{}
 	ch := make(chan Record, 1024)
 	go func() {
-		location, err := time.LoadLocation("Asia/Shanghai")
-		if err != nil {
-			log.Fatal(err)
-		}
 		for r := range ch {
-			fmt.Printf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
+			recordConsumerStdout.consumer(&r)
 		}
 	}()
 
