@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
@@ -22,6 +23,7 @@ type Record struct {
 
 type RecordConsumer interface {
 	consumer(*Record)
+	close()
 }
 
 type StdoutRecordConsumer struct {
@@ -37,6 +39,60 @@ func (c *StdoutRecordConsumer) consumer(r *Record) {
 		log.Fatal(err)
 	}
 	fmt.Printf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
+}
+
+func (c *StdoutRecordConsumer) close() {
+}
+
+type KafkaOutput struct {
+	producer sarama.SyncProducer
+}
+
+func NewKafkaOutput() KafkaOutput {
+	config := sarama.NewConfig()
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Retry.Max = 5
+	config.Producer.Return.Successes = true
+	producer, err := sarama.NewSyncProducer([]string{"172.30.253.207:9092"}, config)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+
+	}()
+
+	return KafkaOutput{
+		producer: producer,
+	}
+}
+
+func (k *KafkaOutput) consumer(r *Record) {
+	if r == nil {
+		log.Fatal("emptry record!")
+		return
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		log.Fatal(err)
+	}
+	value := fmt.Sprintf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
+
+	message := &sarama.ProducerMessage{
+		Topic: "demo",
+		Key:   sarama.StringEncoder("key"),
+		Value: sarama.StringEncoder(value),
+	}
+
+	_, _, err = k.producer.SendMessage(message)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (k *KafkaOutput) close() {
+	if err := k.producer.Close(); err != nil {
+		panic(err)
+	}
 }
 
 func main() {
@@ -56,11 +112,13 @@ func main() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	recordConsumerStdout := &StdoutRecordConsumer{}
+	kafkaOutput := NewKafkaOutput()
+	defer kafkaOutput.close()
+
 	ch := make(chan Record, 1024)
 	go func() {
 		for r := range ch {
-			recordConsumerStdout.consumer(&r)
+			kafkaOutput.consumer(&r)
 		}
 	}()
 
