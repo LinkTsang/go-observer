@@ -11,20 +11,22 @@ import (
 
 type KafkaOutput struct {
 	producer sarama.SyncProducer
+	topic    string
 }
 
-func NewKafkaOutput() KafkaOutput {
+func NewKafkaOutput(brokers []string, topic string) KafkaOutput {
 	config := sarama.NewConfig()
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Retry.Max = 5
 	config.Producer.Return.Successes = true
-	producer, err := sarama.NewSyncProducer([]string{"172.30.253.207:9092"}, config)
+	producer, err := sarama.NewSyncProducer(brokers, config)
 	if err != nil {
 		panic(err)
 	}
 
 	return KafkaOutput{
 		producer: producer,
+		topic:    topic,
 	}
 }
 
@@ -40,7 +42,7 @@ func (k *KafkaOutput) Consume(r *record.Record) {
 	value := fmt.Sprintf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
 
 	message := &sarama.ProducerMessage{
-		Topic: "demo",
+		Topic: k.topic,
 		Key:   sarama.StringEncoder("key"),
 		Value: sarama.StringEncoder(value),
 	}
