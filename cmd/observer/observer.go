@@ -15,20 +15,25 @@ import (
 
 func handle(cCtx *cli.Context) error {
 
+	pcapDevice := cCtx.String("pcap-device")
+	pcapSnaplen := cCtx.Int("pcap-snaplen")
+	pcapFilter := cCtx.String("pcap-filter")
+	log.Printf("pcap device: %v\n", pcapDevice)
+	log.Printf("pcap snaplen: %v\n", pcapSnaplen)
+	log.Printf("pcap bpf filter: %v\n", pcapFilter)
+
 	brokers := strings.Split(cCtx.String("kafka-brokers"), ";")
 	topic := cCtx.String("kafka-topic")
 	log.Printf("kafka brokers: %v\n", brokers)
 	log.Printf("kafka topic: %v\n", topic)
 
-	handle, err := pcap.OpenLive("lo", 65536, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(pcapDevice, int32(pcapSnaplen), true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer handle.Close()
 
-	filter := "tcp port 8080"
-	log.Println("set bpf filter:", filter)
-	err = handle.SetBPFFilter(filter)
+	err = handle.SetBPFFilter(pcapFilter)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,6 +96,21 @@ func main() {
 		Name:  "go-observer",
 		Usage: "observer anything!",
 		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "pcap-device",
+				Value: "lo",
+				Usage: "device for pcap",
+			},
+			&cli.IntFlag{
+				Name:  "pcap-snaplen",
+				Value: 65535,
+				Usage: "snaplen for pcap",
+			},
+			&cli.StringFlag{
+				Name:  "pcap-filter",
+				Value: "tcp port 8080",
+				Usage: "bpf filter for pcap",
+			},
 			&cli.StringFlag{
 				Name:  "kafka-brokers",
 				Value: "127.0.0.1:9092",
