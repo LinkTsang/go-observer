@@ -1,17 +1,87 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/LinkTsang/go-observer/internal/output"
 	"github.com/LinkTsang/go-observer/internal/record"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/tcpassembly"
+	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"github.com/urfave/cli/v2"
 )
+
+// Build a simple HTTP request parser using tcpassembly.StreamFactory and tcpassembly.Stream interfaces
+
+// httpStreamFactory implements tcpassembly.StreamFactory
+type httpStreamFactory struct{}
+
+// httpStream will handle the actual decoding of http requests.
+type httpStream struct {
+	net, transport gopacket.Flow
+	r              tcpreader.ReaderStream
+}
+
+func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
+	hstream := &httpStream{
+		net:       net,
+		transport: transport,
+		r:         tcpreader.NewReaderStream(),
+	}
+	go hstream.run() // Important... we must guarantee that data from the reader stream is read.
+
+	// ReaderStream implements tcpassembly.Stream, so we can return a pointer to it.
+	return &hstream.r
+}
+
+func (h *httpStream) run() {
+	buf := bufio.NewReader(&h.r)
+	for {
+		magicNumber, err := buf.Peek(4)
+		if err == io.EOF {
+			// We must read until we see an EOF... very important!
+			return
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
+		} else {
+			if bytes.Equal([]byte("HTTP"), magicNumber) {
+				resp, err := http.ReadResponse(buf, nil)
+				if err == io.EOF {
+					// We must read until we see an EOF... very important!
+					return
+				} else if err != nil {
+					log.Println("Error reading stream", h.net, h.transport, ":", err)
+				} else {
+					bodyBytes := tcpreader.DiscardBytesToEOF(resp.Body)
+					resp.Body.Close()
+					log.Printf("Received response from stream %v %v : %+v with %v bytes in response body\n", h.net, h.transport, resp, bodyBytes)
+				}
+			} else {
+				req, err := http.ReadRequest(buf)
+				if err == io.EOF {
+					// We must read until we see an EOF... very important!
+					return
+				} else if err != nil {
+					log.Println("Error reading stream", h.net, h.transport, ":", err)
+				} else {
+					bodyBytes := tcpreader.DiscardBytesToEOF(req.Body)
+					req.Body.Close()
+					log.Printf("Received request from stream %v %v : %+v with %v bytes in request body", h.net, h.transport, req, bodyBytes)
+				}
+			}
+		}
+	}
+}
 
 func handle(cCtx *cli.Context) error {
 
@@ -52,42 +122,78 @@ func handle(cCtx *cli.Context) error {
 		}
 	}()
 
-	for packet := range packetSource.Packets() {
-		ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
-		ipLayer := packet.Layer(layers.LayerTypeIPv4)
-		tcpLayer := packet.Layer(layers.LayerTypeTCP)
+	streamFactory := &httpStreamFactory{}
+	streamPool := tcpassembly.NewStreamPool(streamFactory)
+	assembler := tcpassembly.NewAssembler(streamPool)
 
-		if ethernetLayer != nil && ipLayer != nil && tcpLayer != nil {
-			ipPacket, _ := ipLayer.(*layers.IPv4)
-			tcpPacket, _ := tcpLayer.(*layers.TCP)
+	ticker := time.Tick(time.Minute)
 
-			timestamp := packet.Metadata().Timestamp
-			srcIP := ipPacket.SrcIP
-			srcPort := tcpPacket.SrcPort
-			dstIP := ipPacket.DstIP
-			dstPort := tcpPacket.DstPort
+	var eth layers.Ethernet
+	var ip4 layers.IPv4
+	var ip6 layers.IPv6
+	var tcp layers.TCP
+	var udp layers.UDP
+	var payload gopacket.Payload
+	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &ip4, &ip6, &tcp, &udp, &payload)
+	decodedLayers := make([]gopacket.LayerType, 0, 10)
 
-			r := record.Record{
-				Timestamp: timestamp,
-				SrcIP:     srcIP,
-				SrcPort:   srcPort,
-				DstIP:     dstIP,
-				DstPort:   dstPort,
+	for {
+		select {
+		case packet := <-packetSource.Packets():
+			{
+				if err := parser.DecodeLayers(packet.Data(), &decodedLayers); err != nil {
+					log.Printf("Could not decode layers: %v\n", err)
+					continue
+				}
+
+				timestamp := packet.Metadata().Timestamp
+
+				var srcIP net.IP
+				var srcPort layers.TCPPort
+				var dstIP net.IP
+				var dstPort layers.TCPPort
+				var payload []byte
+
+				for _, layerType := range decodedLayers {
+					switch layerType {
+					case layers.LayerTypeIPv4:
+						{
+							srcIP = ip4.SrcIP
+							dstIP = ip4.DstIP
+						}
+					case layers.LayerTypeTCP:
+						{
+							srcPort = tcp.SrcPort
+							dstPort = tcp.DstPort
+							if tcp.DstPort == layers.TCPPort(serverPort) && tcp.Payload != nil {
+								payload = tcp.Payload
+							}
+
+							if tcp.SrcPort == layers.TCPPort(serverPort) && tcp.Payload != nil {
+								payload = tcp.Payload
+							}
+
+							assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), &tcp, packet.Metadata().Timestamp)
+						}
+					}
+				}
+
+				r := record.Record{
+					Timestamp: timestamp,
+					SrcIP:     srcIP,
+					SrcPort:   srcPort,
+					DstIP:     dstIP,
+					DstPort:   dstPort,
+					Payload:   payload,
+				}
+
+				ch <- r
 			}
-
-			if tcpPacket.DstPort == layers.TCPPort(serverPort) && tcpPacket.Payload != nil {
-				r.Payload = tcpPacket.Payload
-			}
-
-			if tcpPacket.SrcPort == layers.TCPPort(serverPort) && tcpPacket.Payload != nil {
-				r.Payload = tcpPacket.Payload
-			}
-
-			ch <- r
+		case <-ticker:
+			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
 		}
 	}
 
-	return nil
 }
 
 func main() {
