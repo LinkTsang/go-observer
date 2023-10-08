@@ -1,87 +1,21 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"io"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/LinkTsang/go-observer/internal/output"
+	"github.com/LinkTsang/go-observer/internal/protocol"
 	"github.com/LinkTsang/go-observer/internal/record"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-	"github.com/google/gopacket/tcpassembly"
-	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"github.com/urfave/cli/v2"
 )
-
-// Build a simple HTTP request parser using tcpassembly.StreamFactory and tcpassembly.Stream interfaces
-
-// httpStreamFactory implements tcpassembly.StreamFactory
-type httpStreamFactory struct{}
-
-// httpStream will handle the actual decoding of http requests.
-type httpStream struct {
-	net, transport gopacket.Flow
-	r              tcpreader.ReaderStream
-}
-
-func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
-	hstream := &httpStream{
-		net:       net,
-		transport: transport,
-		r:         tcpreader.NewReaderStream(),
-	}
-	go hstream.run() // Important... we must guarantee that data from the reader stream is read.
-
-	// ReaderStream implements tcpassembly.Stream, so we can return a pointer to it.
-	return &hstream.r
-}
-
-func (h *httpStream) run() {
-	buf := bufio.NewReader(&h.r)
-	for {
-		magicNumber, err := buf.Peek(4)
-		if err == io.EOF {
-			// We must read until we see an EOF... very important!
-			return
-		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
-		} else {
-			if bytes.Equal([]byte("HTTP"), magicNumber) {
-				resp, err := http.ReadResponse(buf, nil)
-				if err == io.EOF {
-					// We must read until we see an EOF... very important!
-					return
-				} else if err != nil {
-					log.Println("Error reading stream", h.net, h.transport, ":", err)
-				} else {
-					bodyBytes := tcpreader.DiscardBytesToEOF(resp.Body)
-					resp.Body.Close()
-					log.Printf("Received response from stream %v %v : %+v with %v bytes in response body\n", h.net, h.transport, resp, bodyBytes)
-				}
-			} else {
-				req, err := http.ReadRequest(buf)
-				if err == io.EOF {
-					// We must read until we see an EOF... very important!
-					return
-				} else if err != nil {
-					log.Println("Error reading stream", h.net, h.transport, ":", err)
-				} else {
-					bodyBytes := tcpreader.DiscardBytesToEOF(req.Body)
-					req.Body.Close()
-					log.Printf("Received request from stream %v %v : %+v with %v bytes in request body", h.net, h.transport, req, bodyBytes)
-				}
-			}
-		}
-	}
-}
 
 func handle(cCtx *cli.Context) error {
 
@@ -122,9 +56,7 @@ func handle(cCtx *cli.Context) error {
 		}
 	}()
 
-	streamFactory := &httpStreamFactory{}
-	streamPool := tcpassembly.NewStreamPool(streamFactory)
-	assembler := tcpassembly.NewAssembler(streamPool)
+	tcpHandler := protocol.NewTcpHandler()
 
 	ticker := time.Tick(time.Minute)
 
@@ -173,7 +105,7 @@ func handle(cCtx *cli.Context) error {
 								payload = tcp.Payload
 							}
 
-							assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), &tcp, packet.Metadata().Timestamp)
+							tcpHandler.HandlePacket(&tcp, packet)
 						}
 					}
 				}
@@ -190,7 +122,7 @@ func handle(cCtx *cli.Context) error {
 				ch <- r
 			}
 		case <-ticker:
-			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
+			tcpHandler.HandleTicket()
 		}
 	}
 
