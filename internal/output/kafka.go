@@ -39,7 +39,7 @@ func (k *KafkaOutput) Consume(r *record.Record) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	value := fmt.Sprintf("[%s] %s:%d -> %s:%d\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort)
+	value := fmt.Sprintf("[%s] %s:%d -> %s:%d \n```payload length:%v\n%v\n```\n", r.Timestamp.In(location).Format("2006-01-02 15:04:05.000000 MST"), r.SrcIP, r.SrcPort, r.DstIP, r.DstPort, len(r.Payload), string(r.Payload))
 
 	message := &sarama.ProducerMessage{
 		Topic: k.topic,
