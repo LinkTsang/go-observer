@@ -104,7 +104,8 @@ var outputLevel int = 2
 
 // Too bad for perf that a... is evaluated
 func Error(t string, s string, a ...interface{}) {
-	log.Printf(s, a...)
+	msg := fmt.Sprintf(s, a...)
+	log.Println(t, msg)
 }
 func Info(s string, a ...interface{}) {
 	if outputLevel >= 1 {
@@ -134,7 +135,7 @@ func (h *httpReader) run(wg *sync.WaitGroup) {
 			if err != nil {
 				Error("HTTP-request-body", "Got body err: %s\n", err)
 			} else if h.hexdump {
-				Info("Body(%d/0x%x)\n%s\n", len(body), len(body), hex.Dump(body))
+				Info("Header(%s)\nBody(%d/0x%x)\n%s\n", req.Header, len(body), len(body), hex.Dump(body))
 			}
 			req.Body.Close()
 			Info("HTTP/%s Request: %s %s (body:%d)\n", h.ident, req.Method, req.URL, s)
