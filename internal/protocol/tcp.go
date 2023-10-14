@@ -141,7 +141,7 @@ func (h *httpReader) run(wg *sync.WaitGroup) {
 			Info("HTTP/%s Request: %s %s (body:%d)\n", h.ident, req.Method, req.URL, s)
 			h.parent.Lock()
 			h.parent.urls = append(h.parent.urls, req.URL.String())
-			h.parent.Unlock()
+			defer h.parent.Unlock()
 		} else {
 			res, err := http.ReadResponse(b, nil)
 			var req string
@@ -151,7 +151,7 @@ func (h *httpReader) run(wg *sync.WaitGroup) {
 			} else {
 				req, h.parent.urls = h.parent.urls[0], h.parent.urls[1:]
 			}
-			h.parent.Unlock()
+			defer h.parent.Unlock()
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			} else if err != nil {
