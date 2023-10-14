@@ -132,6 +132,7 @@ func handle(cCtx *cli.Context) error {
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
 
 	go func() {
 		log.Fatalln(http.ListenAndServe(":19999", nil))
