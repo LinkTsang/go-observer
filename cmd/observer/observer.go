@@ -15,6 +15,9 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/urfave/cli/v2"
+
+	"net/http"
+	_ "net/http/pprof"
 )
 
 func handle(cCtx *cli.Context) error {
@@ -129,6 +132,10 @@ func handle(cCtx *cli.Context) error {
 }
 
 func main() {
+
+	go func() {
+		log.Fatalln(http.ListenAndServe(":19999", nil))
+	}()
 
 	app := &cli.App{
 		Name:  "go-observer",
