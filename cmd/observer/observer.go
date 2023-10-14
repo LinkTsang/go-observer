@@ -133,6 +133,12 @@ func handle(cCtx *cli.Context) error {
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+	f, err := os.OpenFile("logs/observer.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+	defer f.Close()
+	log.SetOutput(f)
 
 	go func() {
 		log.Fatalln(http.ListenAndServe(":19999", nil))
